@@ -185,6 +185,9 @@ module Dependabot
             # Bump the deps we want to upgrade using `go get lib@version`
             run_go_get(dependencies)
 
+            # Update tool directives for tool dependencies
+            update_tool_directives(dependencies)
+
             # Run `go get`'s internal validation checks against _each_ module in `go.mod`
             # by running `go get` w/o specifying any library. It finds problems like when a
             # module declares itself using a different name than specified in our `go.mod` etc.
@@ -233,6 +236,23 @@ module Dependabot
           command = "go mod vendor"
           _, stderr, status = Open3.capture3(command)
           handle_subprocess_error(stderr) unless status.success?
+        end
+
+        sig { params(dependencies: T.untyped).void }
+        def update_tool_directives(dependencies = [])
+          # Update tool directives for dependencies marked as tool dependencies
+          tool_dependencies = dependencies.select do |dep|
+            dep.metadata&.fetch(:dependency_type, nil) == "tool"
+          end
+
+          return if tool_dependencies.empty?
+
+          tool_dependencies.each do |dep|
+            # Ensure the tool directive exists for this dependency
+            command = "go mod edit -tool=#{dep.name}"
+            _, stderr, status = Open3.capture3(command)
+            handle_subprocess_error(stderr) unless status.success?
+          end
         end
 
         sig { params(dependencies: T.untyped).void }

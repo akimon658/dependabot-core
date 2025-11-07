@@ -416,6 +416,45 @@ RSpec.describe Dependabot::GoModules::FileParser do
         expect(dependencies.map(&:name)).to eq([])
       end
     end
+
+    context "with tool directive" do
+      let(:project_name) { "tool_directive" }
+      let(:go_mod_content) { fixture("projects", project_name, "go.mod") }
+
+      it "parses tool dependencies" do
+        # We expect:
+        # - golang.org/x/text (regular dependency, top-level)
+        # - golang.org/x/mod (indirect dependency of tool, not top-level)
+        # - golang.org/x/sync (indirect dependency of tool, not top-level)
+        # - golang.org/x/tools/cmd/stringer (tool dependency, top-level)
+        expect(dependencies.length).to eq(4)
+
+        top_level_deps = dependencies.select(&:top_level?)
+        expect(top_level_deps.length).to eq(2)
+
+        # Regular dependency
+        regular_dep = dependencies.find { |d| d.name == "golang.org/x/text" }
+        expect(regular_dep).not_to be_nil
+        expect(regular_dep.version).to eq("0.21.0")
+        expect(regular_dep.requirements).not_to be_empty
+        expect(regular_dep.metadata).to eq({})
+        expect(regular_dep.top_level?).to be true
+
+        # Tool dependency
+        tool_dep = dependencies.find { |d| d.name == "golang.org/x/tools/cmd/stringer" }
+        expect(tool_dep).not_to be_nil
+        expect(tool_dep.version).to eq("0.21.1-0.20240508182429-e35e4ccd0d2d")
+        expect(tool_dep.requirements.length).to eq(1)
+        expect(tool_dep.requirements.first[:groups]).to eq(["tool"])
+        expect(tool_dep.metadata).to eq({ dependency_type: "tool" })
+        expect(tool_dep.top_level?).to be true
+
+        # Indirect dependencies should not be top-level
+        indirect_deps = dependencies.reject(&:top_level?)
+        expect(indirect_deps.length).to eq(2)
+        expect(indirect_deps.map(&:name)).to contain_exactly("golang.org/x/mod", "golang.org/x/sync")
+      end
+    end
   end
 
   describe "#ecosystem" do

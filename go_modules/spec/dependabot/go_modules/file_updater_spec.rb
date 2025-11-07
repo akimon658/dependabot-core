@@ -270,5 +270,57 @@ RSpec.describe Dependabot::GoModules::FileUpdater do
         end
       end
     end
+
+    context "with a tool dependency update" do
+      let(:project_name) { "tool_directive" }
+      let(:dependency_name) { "golang.org/x/tools/cmd/stringer" }
+      let(:dependency_previous_version) { "0.21.1-0.20240508182429-e35e4ccd0d2d" }
+      let(:dependency_version) { "0.22.0" }
+      let(:previous_requirements) do
+        [{
+          file: "go.mod",
+          requirement: "v#{dependency_previous_version}",
+          groups: ["tool"],
+          source: {
+            type: "default",
+            source: dependency_name
+          }
+        }]
+      end
+      let(:requirements) do
+        [{
+          file: "go.mod",
+          requirement: "v#{dependency_version}",
+          groups: ["tool"],
+          source: {
+            type: "default",
+            source: dependency_name
+          }
+        }]
+      end
+      let(:dependency) do
+        Dependabot::Dependency.new(
+          name: dependency_name,
+          version: dependency_version,
+          requirements: requirements,
+          previous_version: dependency_previous_version,
+          previous_requirements: previous_requirements,
+          package_manager: "go_modules",
+          metadata: { dependency_type: "tool" }
+        )
+      end
+
+      it "updates the go.mod file with the new tool version" do
+        updated_go_mod = updated_files.find { |f| f.name == "go.mod" }
+        expect(updated_go_mod).not_to be_nil
+        expect(updated_go_mod.content).to include("tool golang.org/x/tools/cmd/stringer")
+        expect(updated_go_mod.content).to include("v#{dependency_version}")
+      end
+
+      it "updates the go.sum file" do
+        updated_go_sum = updated_files.find { |f| f.name == "go.sum" }
+        expect(updated_go_sum).not_to be_nil
+      end
+    end
   end
 end

@@ -52,13 +52,8 @@ module Dependabot
       def parse
         dependency_set = Dependabot::FileParsers::Base::DependencySet.new
 
-        required_packages.each do |hsh|
-          unless skip_dependency?(hsh) # rubocop:disable Style/Next
-
-            dep = dependency_from_details(hsh)
-            dependency_set << dep
-          end
-        end
+        parse_required_packages(dependency_set)
+        parse_tool_packages(dependency_set)
 
         dependency_set.dependencies
       end
@@ -98,6 +93,38 @@ module Dependabot
       end
 
       private
+
+      sig { params(dependency_set: Dependabot::FileParsers::Base::DependencySet).void }
+      def parse_required_packages(dependency_set)
+        # Collect tool package paths and their parent modules to avoid duplicates
+        tool_paths = tool_packages.map { |pkg| pkg["Path"] }
+
+        # Also collect the module paths that provide these tools
+        tool_module_paths = tool_paths.flat_map do |tool_path|
+          required_packages
+            .select { |pkg| tool_path == pkg["Path"] || tool_path.start_with?("#{pkg['Path']}/") }
+            .map { |pkg| pkg["Path"] }
+        end.uniq
+
+        required_packages.each do |hsh|
+          # Skip if this is a tool dependency or its module (will be added separately)
+          next if tool_paths.include?(hsh["Path"]) || tool_module_paths.include?(hsh["Path"])
+          next if skip_dependency?(hsh)
+
+          dep = dependency_from_details(hsh)
+          dependency_set << dep
+        end
+      end
+
+      sig { params(dependency_set: Dependabot::FileParsers::Base::DependencySet).void }
+      def parse_tool_packages(dependency_set)
+        tool_packages.each do |hsh|
+          next if skip_dependency?(hsh)
+
+          dep = tool_dependency_from_details(hsh)
+          dependency_set << dep
+        end
+      end
 
       sig { void }
       def set_go_environment_variables
@@ -215,11 +242,59 @@ module Dependabot
         )
       end
 
+      sig { params(details: T::Hash[String, T.untyped]).returns(Dependabot::Dependency) }
+      def tool_dependency_from_details(details)
+        # Tool dependencies are stored in the Tool array, but their versions
+        # are tracked in the Require array (as indirect dependencies).
+        # We need to find the corresponding version from required_packages.
+        tool_path = details["Path"]
+
+        # Tool paths can be subpackages (e.g., golang.org/x/tools/cmd/stringer)
+        # but versions are tracked at the module level (e.g., golang.org/x/tools)
+        # Find the module that contains this tool
+        version_info = required_packages.find do |pkg|
+          # Check if the tool path starts with the package path
+          # This handles cases where tool is a subpackage
+          tool_path == pkg["Path"] || tool_path.start_with?("#{pkg['Path']}/")
+        end
+
+        source = { type: "default", source: tool_path }
+        version = version_info&.dig("Version")&.sub(/^v?/, "")
+
+        reqs = if version_info
+                 [{
+                   requirement: version_info["Version"],
+                   file: go_mod&.name,
+                   source: source,
+                   groups: ["tool"]
+                 }]
+               else
+                 []
+               end
+
+        Dependency.new(
+          name: tool_path,
+          version: version,
+          requirements: reqs,
+          package_manager: "go_modules",
+          metadata: { dependency_type: "tool" }
+        )
+      end
+
       sig { returns(T::Array[T::Hash[String, T.untyped]]) }
       def required_packages
         @required_packages ||=
           T.let(
             JSON.parse(run_in_parsed_context("go mod edit -json"))["Require"] || [],
+            T.nilable(T::Array[T::Hash[String, T.untyped]])
+          )
+      end
+
+      sig { returns(T::Array[T::Hash[String, T.untyped]]) }
+      def tool_packages
+        @tool_packages ||=
+          T.let(
+            JSON.parse(run_in_parsed_context("go mod edit -json"))["Tool"] || [],
             T.nilable(T::Array[T::Hash[String, T.untyped]])
           )
       end
