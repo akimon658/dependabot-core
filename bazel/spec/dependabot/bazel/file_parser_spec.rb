@@ -43,6 +43,37 @@ RSpec.describe Dependabot::Bazel::FileParser do
     end
   end
 
+  describe "#ecosystem" do
+    it "returns the Bazel ecosystem with package manager and language" do
+      ecosystem = parser.ecosystem
+
+      expect(ecosystem.name).to eq("bazel")
+      expect(ecosystem.package_manager.name).to eq("bazel")
+      expect(ecosystem.language.name).to eq("bazel")
+    end
+
+    context "with .bazelversion file" do
+      let(:dependency_files) { bazel_project_dependency_files("with_bazelversion") }
+
+      it "uses the detected Bazel version" do
+        ecosystem = parser.ecosystem
+
+        expect(ecosystem.package_manager.version.to_s).to eq("6.4.0")
+        expect(ecosystem.language.version.to_s).to eq("6.4.0")
+      end
+    end
+
+    context "without .bazelversion file" do
+      it "uses the default version for detected_version" do
+        ecosystem = parser.ecosystem
+
+        expect(ecosystem.package_manager.detected_version.to_s).to eq("8.4.2")
+        expect(ecosystem.package_manager.version).to be_nil
+        expect(ecosystem.language.version.to_s).to eq("8.4.2")
+      end
+    end
+  end
+
   context "with WORKSPACE file" do
     let(:dependency_files) { bazel_project_dependency_files("simple_workspace") }
 
@@ -76,6 +107,36 @@ RSpec.describe Dependabot::Bazel::FileParser do
 
     it "detects the Bazel version" do
       expect(parser.send(:bazel_version)).to eq("6.4.0")
+    end
+  end
+
+  context "with *.MODULE.bazel files" do
+    let(:dependency_files) { bazel_project_dependency_files("with_additional_module_files") }
+
+    it "parses dependencies from both MODULE.bazel and *.MODULE.bazel files" do
+      dependencies = parser.parse
+
+      expect(dependencies.length).to eq(3)
+
+      expect(dependencies.map(&:name)).to contain_exactly(
+        "rules_cc",
+        "platforms",
+        "abseil-cpp"
+      )
+
+      # Dependency from main MODULE.bazel
+      rules_cc_dep = dependencies.find { |d| d.name == "rules_cc" }
+      expect(rules_cc_dep.version).to eq("0.1.1")
+      expect(rules_cc_dep.requirements.first[:file]).to eq("MODULE.bazel")
+
+      # Dependencies from deps.MODULE.bazel
+      platforms_dep = dependencies.find { |d| d.name == "platforms" }
+      expect(platforms_dep.version).to eq("0.0.11")
+      expect(platforms_dep.requirements.first[:file]).to eq("deps.MODULE.bazel")
+
+      abseil_dep = dependencies.find { |d| d.name == "abseil-cpp" }
+      expect(abseil_dep.version).to eq("20230125.3")
+      expect(abseil_dep.requirements.first[:file]).to eq("deps.MODULE.bazel")
     end
   end
 
@@ -123,6 +184,29 @@ RSpec.describe Dependabot::Bazel::FileParser do
 
       rules_docker = dependencies.find { |d| d.name == "io_bazel_rules_docker" }
       expect(rules_docker.version).to eq("0.25.0")
+    end
+
+    it "captures remote URL from git_repository dependencies" do
+      dependencies = parser.parse
+
+      protobuf = dependencies.find { |d| d.name == "com_google_protobuf" }
+      expect(protobuf).not_to be_nil
+
+      requirement = protobuf.requirements.first
+      expect(requirement[:source][:type]).to eq("git_repository")
+      expect(requirement[:source][:tag]).to eq("v3.19.4")
+      expect(requirement[:source][:remote]).to eq("https://github.com/protocolbuffers/protobuf")
+    end
+
+    it "captures URLs from http_archive dependencies" do
+      dependencies = parser.parse
+
+      rules_go = dependencies.find { |d| d.name == "rules_go" }
+      expect(rules_go).not_to be_nil
+
+      requirement = rules_go.requirements.first
+      expect(requirement[:source][:type]).to eq("http_archive")
+      expect(requirement[:source][:url]).to include("github.com/bazelbuild/rules_go")
     end
   end
 

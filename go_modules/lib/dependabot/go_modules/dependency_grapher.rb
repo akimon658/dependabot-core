@@ -18,7 +18,7 @@ module Dependabot
       #   rsc.io/sampler@v1.3.0 golang.org/x/text@v0.0.0-20170915032832-14c0d48ead0c
       #   <---parent--->        <----child------>
       #
-      GO_MOD_GRAPH_LINE_REGEX = /^(?<parent>[^@\s]+)@?[^\s]*\s(?<child>[^@\s]+)/
+      GO_MOD_GRAPH_LINE_REGEX = T.let(/^(?<parent>[^@\s]+)@?[^\s]*\s(?<child>[^@\s]+)/, Regexp)
 
       sig { override.returns(Dependabot::DependencyFile) }
       def relevant_dependency_file
@@ -37,7 +37,9 @@ module Dependabot
       # doing this in the parser shouldn't add a huge overhead.
       sig { override.params(dependency: Dependabot::Dependency).returns(T::Array[String]) }
       def fetch_subdependencies(dependency)
-        package_relationships.fetch(dependency.name, [])
+        # go mod graph returns all dependencies it finds, even if it has been pruned. So filter those out.
+        dependency_names = @dependencies.map(&:name)
+        package_relationships.fetch(dependency.name, []).select { |child| dependency_names.include?(child) }
       end
 
       sig { returns(T.nilable(Dependabot::DependencyFile)) }
@@ -72,7 +74,6 @@ module Dependabot
         )
       end
 
-      # TODO: Re-instate method once we consider how we are handling `replace` directives
       sig { returns(T::Hash[String, T.untyped]) }
       def fetch_package_relationships
         T.cast(
